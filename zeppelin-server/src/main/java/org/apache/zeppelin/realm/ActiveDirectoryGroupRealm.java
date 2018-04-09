@@ -296,10 +296,10 @@ public class ActiveDirectoryGroupRealm extends AbstractLdapRealm {
     return roles;
   }
 
-  private Set<String> getRoleNamesForUser(String username, LdapContext ldapContext)
+  private Set<String> getRoleNamesForUser(final String username, LdapContext ldapContext)
           throws NamingException {
-    Set<String> roleNames = new LinkedHashSet<>();
 
+    final Set<String> roleNames = new LinkedHashSet<>();
     SearchControls searchCtls = new SearchControls();
     searchCtls.setSearchScope(SearchControls.SUBTREE_SCOPE);
     String userPrincipalName = username;
@@ -309,37 +309,58 @@ public class ActiveDirectoryGroupRealm extends AbstractLdapRealm {
 
     String searchFilter = "(&(objectClass=*)(userPrincipalName=" + userPrincipalName + "))";
     Object[] searchArguments = new Object[]{userPrincipalName};
+    final NamingEnumeration answer = ldapContext.search(searchBase, searchFilter, searchArguments,
+            searchCtls);
 
-    NamingEnumeration answer = ldapContext.search(searchBase, searchFilter, searchArguments,
-        searchCtls);
+    Thread getRoleNamesThread = new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          while (answer.hasMoreElements()) {
 
-    while (answer.hasMoreElements()) {
-      SearchResult sr = (SearchResult) answer.next();
+            SearchResult sr = (SearchResult) answer.next();
+              if (log.isDebugEnabled()) {
+                  log.debug("Retrieving group names for user [" + sr.getName() + "]");
+              }
 
-      if (log.isDebugEnabled()) {
-        log.debug("Retrieving group names for user [" + sr.getName() + "]");
-      }
+            Attributes attrs = sr.getAttributes();
+            if (attrs != null) {
+              NamingEnumeration ae = attrs.getAll();
+              while (ae.hasMore()) {
+                Attribute attr = (Attribute) ae.next();
+                if (attr.getID().equals("memberOf")) {
+                  Collection<String> groupNames = LdapUtils.getAllAttributeValues(attr);
 
-      Attributes attrs = sr.getAttributes();
+                  if (log.isDebugEnabled()) {
+                      log.debug("Groups found for user [" + username + "]: " + groupNames);
+                  }
 
-      if (attrs != null) {
-        NamingEnumeration ae = attrs.getAll();
-        while (ae.hasMore()) {
-          Attribute attr = (Attribute) ae.next();
-
-          if (attr.getID().equals("memberOf")) {
-
-            Collection<String> groupNames = LdapUtils.getAllAttributeValues(attr);
-
-            if (log.isDebugEnabled()) {
-              log.debug("Groups found for user [" + username + "]: " + groupNames);
+                  Collection<String> rolesForGroups = getRoleNamesForGroups(groupNames);
+                  roleNames.addAll(rolesForGroups);
+                }
+              }
             }
-
-            Collection<String> rolesForGroups = getRoleNamesForGroups(groupNames);
-            roleNames.addAll(rolesForGroups);
           }
+        } catch (Exception e) {
+          log.error(e.getMessage(), e);
         }
+
       }
+    });
+
+    getRoleNamesThread.start();
+    try {
+      int millis = 0;
+      while (getRoleNamesThread.isAlive() && millis < 500) {
+        Thread.sleep(10);
+        millis += 10;
+      }
+    } catch (Exception e) {
+        log.error(e.getMessage(), e);
+    }
+
+    if (getRoleNamesThread.isAlive()) {
+      log.debug("getRoleNamesThread thread is frozen! skip wait. close thread!");
     }
     return roleNames;
   }
