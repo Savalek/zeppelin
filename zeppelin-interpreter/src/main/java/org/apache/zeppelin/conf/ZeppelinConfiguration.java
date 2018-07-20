@@ -436,6 +436,10 @@ public class ZeppelinConfiguration extends XMLConfiguration {
     return getConfigFSDir() + "/interpreter.json";
   }
 
+  public String getMetadataCacheServerSettingsPath() {
+    return getConfigFSDir() + "/database-meta.json";
+  }
+
   public String getHeliumConfPath() {
     return getRelativeDir(String.format("%s/helium.json", getConfDir()));
   }

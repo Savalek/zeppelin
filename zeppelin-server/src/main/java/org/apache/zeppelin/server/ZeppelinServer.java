@@ -31,6 +31,7 @@ import org.apache.shiro.realm.text.IniRealm;
 import org.apache.shiro.web.env.EnvironmentLoaderListener;
 import org.apache.shiro.web.mgt.DefaultWebSecurityManager;
 import org.apache.shiro.web.servlet.ShiroFilter;
+import org.apache.zeppelin.metadata.MetadataCacheServer;
 import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
@@ -78,6 +79,7 @@ import org.apache.zeppelin.rest.NotebookRepoRestApi;
 import org.apache.zeppelin.rest.NotebookRestApi;
 import org.apache.zeppelin.rest.SecurityRestApi;
 import org.apache.zeppelin.rest.ZeppelinRestApi;
+import org.apache.zeppelin.rest.MetadataCacheRestApi;
 import org.apache.zeppelin.scheduler.SchedulerFactory;
 import org.apache.zeppelin.search.LuceneSearch;
 import org.apache.zeppelin.search.SearchService;
@@ -107,6 +109,7 @@ public class ZeppelinServer extends Application {
   private NotebookAuthorization notebookAuthorization;
   private Credentials credentials;
   private InterpreterService interpreterService;
+  private MetadataCacheServer metadataServer;
 
   public ZeppelinServer() throws Exception {
     ZeppelinConfiguration conf = ZeppelinConfiguration.create();
@@ -184,6 +187,8 @@ public class ZeppelinServer extends Application {
         heliumBundleFactory,
         heliumApplicationFactory,
         interpreterSettingManager);
+
+    this.metadataServer = new MetadataCacheServer(conf, this.interpreterSettingManager);
 
     // create bundle
     try {
@@ -465,6 +470,9 @@ public class ZeppelinServer extends Application {
 
     ConfigurationsRestApi settingsApi = new ConfigurationsRestApi(notebook);
     singletons.add(settingsApi);
+
+    MetadataCacheRestApi metadataApi = new MetadataCacheRestApi(metadataServer);
+    singletons.add(metadataApi);
 
     return singletons;
   }
