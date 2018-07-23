@@ -73,8 +73,7 @@ public class DatabaseCache {
 
     refreshAllSchemas();
 
-    ExecutorService executorService = Executors.newFixedThreadPool(1);
-//    ExecutorService executorService = Executors.newFixedThreadPool(Math.max(filter.size(), 1));
+    ExecutorService executorService = Executors.newFixedThreadPool(Math.max(filter.size(), 1));
 
     if (filter.size() > 0) {
       for (String f : filter) {
