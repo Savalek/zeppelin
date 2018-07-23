@@ -11,7 +11,7 @@ abstract public class DatabaseElement {
   protected int id = idCounter++;
   protected String name;
   protected String description;
-  protected boolean isRelevant = true;
+  private boolean isRelevant = true;
 
   public String getName() {
     return name;

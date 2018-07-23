@@ -53,12 +53,6 @@ public class Schema extends DatabaseElement {
     return null;
   }
 
-  public Table removeTable(String tableName) {
-    Table table = getTable(tableName);
-    tables.remove(getTable(tableName));
-    return table;
-  }
-
   public Table getTableById(long id) {
     for (Table table : tables) {
       if (table.getId() == id) {

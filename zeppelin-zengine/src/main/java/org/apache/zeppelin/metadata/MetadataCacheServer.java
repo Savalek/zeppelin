@@ -33,36 +33,21 @@ public class MetadataCacheServer {
     LOGGER.info("Init MetadataCacheServer");
     this.updateDatabaseCacheService = Executors.newScheduledThreadPool(MetaSettings.PARALLEL_UPDATE_DB_COUNT);
 
-    for (InterpreterSetting interpreterSetting : interpreterSettingManager.get()) {
-      if (interpreterSetting.getGroup().equals("jdbc")) {
-        String interpreterName = interpreterSetting.getName();
+    if (MetaSettings.ENABLE_DATABASECACHE_FOR_INTERPRETER) {
+      for (InterpreterSetting interpreterSetting : interpreterSettingManager.get()) {
+        if (interpreterSetting.getGroup().equals("jdbc")) {
+          String interpreterName = interpreterSetting.getName();
+          String url = getProperty(interpreterSetting, "default.url");
+          String username = getProperty(interpreterSetting, "default.user");
+          String password = getProperty(interpreterSetting, "default.password");
+          String driver = getProperty(interpreterSetting, "default.driver");
 
-        if (!MetaSettings.REMOTE_ENABLE && interpreterName.equals("remote")) {
-          continue;
+          if (isCorrectStrings(interpreterName, url, username, password, driver)) {
+            createDatabaseCache(interpreterName, url, username, password, driver, null);
+          } else {
+            LOGGER.error("Failed to parse interpreter properties! interpreterName: " + interpreterName);
+          }
         }
-
-        String url = getProperty(interpreterSetting, "default.url");
-        String username = getProperty(interpreterSetting, "default.user");
-        String password = getProperty(interpreterSetting, "default.password");
-        String driver = getProperty(interpreterSetting, "default.driver");
-        if (!isCorrectStrings(interpreterName, url, username, password, driver)) {
-          LOGGER.error("Failed to parse interpreter properties! interpreterName: " + interpreterName);
-          continue;
-        }
-
-        if (interpreterName.equals("remote")) {
-          DatabaseCache db = new DatabaseCache(interpreterName, url, username, password, driver);
-          ArrayList<String> filter = new ArrayList<>();
-          filter.add("bi_v_");
-          filter.add("test_");
-          filter.add("prod_");
-          createDatabaseCache(interpreterName, url, username, password, driver, filter);
-          continue;
-        }
-
-        if (!interpreterName.equals("superb")) continue;
-
-        //createDatabaseCache(interpreterName, url, username, password, driver, null);
       }
     }
 
@@ -70,21 +55,20 @@ public class MetadataCacheServer {
       JsonElement element = new JsonParser().parse(new FileReader(conf.getMetadataCacheServerSettingsPath()));
       JsonObject json = element.getAsJsonObject();
       json.entrySet().forEach(entry -> {
-          JsonObject settings = (JsonObject) entry.getValue();
-          String dbName = entry.getKey();
-          String url = settings.get("url").getAsString();
-          String username = settings.get("username").getAsString();
-          String password = settings.get("password").getAsString();
-          String driver =   settings.get("driver").getAsString();
+        JsonObject settings = (JsonObject) entry.getValue();
+        String dbName = entry.getKey();
+        String url = settings.get("url").getAsString();
+        String username = settings.get("username").getAsString();
+        String password = settings.get("password").getAsString();
+        String driver = settings.get("driver").getAsString();
 
-          ArrayList<String> filter = new ArrayList<>();
-          settings.get("startWithFilter").getAsJsonArray().forEach(f -> filter.add(f.getAsString()));
-          //createDatabaseCache(dbName, url, username, password, driver, filter);
+        ArrayList<String> filter = new ArrayList<>();
+        settings.get("startWithFilter").getAsJsonArray().forEach(f -> filter.add(f.getAsString()));
+        createDatabaseCache(dbName, url, username, password, driver, filter);
       });
     } catch (FileNotFoundException e) {
-      LOGGER.error("File " + conf.getMetadataCacheServerSettingsPath() + " not found");
+      LOGGER.error("Configuration file '" + conf.getMetadataCacheServerSettingsPath() + "' not found");
     }
-
   }
 
   private void createDatabaseCache(String dbName, String url, String username,
@@ -95,7 +79,13 @@ public class MetadataCacheServer {
       return;
     }
 
-    DatabaseCache db = new DatabaseCache(dbName, url, username, password, driver);
+    DatabaseCache db;
+    try {
+      db = new DatabaseCache(dbName, url, username, password, driver);
+    } catch (ClassNotFoundException e) {
+      LOGGER.error("Can't open driver " + driver, e);
+      return;
+    }
     if (filter != null) {
       db.setFilter(filter);
     }
@@ -160,7 +150,7 @@ public class MetadataCacheServer {
   public ArrayList<JsonObject> jstreeGetRootElements(String databaseName) throws IllegalArgumentException {
     ArrayList<JsonObject> jsonElements = new ArrayList<>();
     DatabaseCache db = getDatabaseCache(databaseName);
-    db.getAllSchemas().forEach(s -> jsonElements.add(s.toJson()));
+    db.getAllSchemas().forEach((key, value) -> jsonElements.add(value.toJson()));
     return jsonElements;
   }
 

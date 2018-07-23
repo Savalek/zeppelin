@@ -59,10 +59,4 @@ public class Table extends DatabaseElement {
     }
     return null;
   }
-
-  public Column removeColumn(String columnName) {
-    Column column = getColumn(columnName);
-    columns.remove(column);
-    return column;
-  }
 }

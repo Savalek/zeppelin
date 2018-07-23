@@ -28,19 +28,15 @@ public class DatabaseCache {
   private String databaseName;
   private String url;
   private ConnectionPool connectionPool;
-  private ArrayList<Schema> schemas = new ArrayList<>();
+  private ConcurrentHashMap<String, Schema> schemas = new ConcurrentHashMap<>();
   private SearchCache searchCache = new SearchCache();
   private ConcurrentHashMap<Integer, DatabaseElement> idsMap = new ConcurrentHashMap<>();
   private ArrayList<String> filter = new ArrayList<>();
 
-  DatabaseCache(String databaseName, String url, String username, String password, String driver) {
+  DatabaseCache(String databaseName, String url, String username, String password, String driver) throws ClassNotFoundException {
     this.databaseName = databaseName;
     this.url = url;
-    try {
-      connectionPool = new ConnectionPool(username, password, url, driver);
-    } catch (ClassNotFoundException e) {
-      e.printStackTrace();
-    }
+    connectionPool = new ConnectionPool(username, password, url, driver);
     LOGGER.info("Create new DatabaseCache. Name: " + databaseName + "; url: " + url);
   }
 
@@ -102,7 +98,7 @@ public class DatabaseCache {
         statusThread.interrupt();
       }
     } catch (InterruptedException e) {
-      e.printStackTrace();
+      LOGGER.error("Can't shutdown executorService", e);
     }
 
     try {
@@ -125,11 +121,12 @@ public class DatabaseCache {
   }
 
   private void refreshAllSchemas() {
+
     try (CPConnection connection = connectionPool.getConnection();
          ResultSet result = connection.getMetaData().getSchemas()) {
 
-      ArrayList<String> schemasToRemove = new ArrayList<>();
-      schemas.forEach((s) -> schemasToRemove.add(s.getName()));
+      schemas.forEach((key, value) -> value.setRelevant(false));
+
       while (result.next()) {
         String schemaName = result.getString("TABLE_SCHEM");
         if (filter != null && filter.size() != 0) {
@@ -145,175 +142,181 @@ public class DatabaseCache {
           }
         }
 
-        if (schemasToRemove.contains(schemaName)) {
-          schemasToRemove.remove(schemaName); // the scheme is still in the database. it does not need to be deleted from cache
-        } else {
-          Schema schema = new Schema(schemaName);
-          schemas.add(schema);
+        Schema schema = getSchema(schemaName);
+        if (schema == null) {
+          schema = new Schema(schemaName);
+          schemas.put(schemaName, schema);
           idsMap.put(schema.getId(), schema);
           searchCache.add(schema);
         }
+        schema.setRelevant(true);
       }
 
-      for (String schemaName : schemasToRemove) {
-        Schema schema = removeSchema(schemaName);
-        idsMap.remove(schema.getId());
-        DELETE_SCHEMA_COUNT.incrementAndGet();
-        searchCache.remove(schema);
+      Iterator<Map.Entry<String, Schema>> iterator = schemas.entrySet().iterator();
+      while (iterator.hasNext()) {
+        Schema schema = iterator.next().getValue();
+        if (!schema.isRelevant()) {
+          idsMap.remove(schema.getId());
+          searchCache.remove(schema);
+          iterator.remove();
+          DELETE_SCHEMA_COUNT.incrementAndGet();
+        }
       }
+
+      SCHEMA_ALL.set(schemas.size());
     } catch (SQLException e) {
-      LOGGER.error("Cannot refresh database. URL: " + url, e);
+      LOGGER.error("Can't refresh schemas from " + url, e);
     }
-    SCHEMA_ALL.set(schemas.size());
   }
 
   private void refreshTables(String schemaPattern) {
-    try (CPConnection connection = connectionPool.getConnection();
-         ResultSet resultSet =
-                 connection.getMetaData().getTables(null, schemaPattern, null, null)) {
+    ArrayList<Schema> schemasList = new ArrayList<>();
+    try (CPConnection connection = connectionPool.getConnection()) {
 
-      Schema schema = null;
-      ArrayList<String> deletedTables = new ArrayList<>();
-      while (resultSet.next()) {
-        String schemaName = resultSet.getString("TABLE_SCHEM");
-        String tableName = resultSet.getString("TABLE_NAME");
-        String tableDescription = resultSet.getString("REMARKS");
-
-        if (schema != null && !schemaName.equals(schema.getName())) {
-          for (String delTableName : deletedTables) {
-            Table table = schema.removeTable(delTableName);
-            idsMap.remove(table.getId());
-            DELETE_TABLE_COUNT.incrementAndGet();
-            searchCache.remove(table);
-
-            LOGGER.warn("DELETE: " + schema.getName() + "." + table.getName());
-
-          }
-          deletedTables.clear();
-          schema = null;
-
-          SCHEMA_LOAD.incrementAndGet();
+      try (ResultSet resultSet = connection.getMetaData().getSchemas(null, schemaPattern)) {
+        while (resultSet.next()) {
+          String schemaName = resultSet.getString("TABLE_SCHEM");
+          Schema schema = getSchema(schemaName);
+          if (schema == null) continue;
+          schemasList.add(schema);
+          schema.getAllTables().forEach(t -> t.setRelevant(false));
         }
+      }
 
-        if (schema == null) {
-          schema = getSchema(schemaName);
+      try (ResultSet resultSet = connection.getMetaData().getTables(null, schemaPattern, null, null)) {
+
+        Schema schema = null;
+        while (resultSet.next()) {
+          String schemaName = resultSet.getString("TABLE_SCHEM");
+          String tableName = resultSet.getString("TABLE_NAME");
+          String tableDescription = resultSet.getString("REMARKS");
+
+          if (schema != null && !schemaName.equals(schema.getName())) {
+            schema = null;
+          }
+
           if (schema == null) {
-            continue;
+            schema = getSchema(schemaName);
+            if (schema == null) {
+              continue;
+            }
+            SCHEMA_LOAD.incrementAndGet();
           }
-          schema.getAllTables().forEach(t -> deletedTables.add(t.getName()));
-        }
 
+          TABLE_ALL.incrementAndGet();
+          Table table = schema.getTable(tableName);
+          if (table == null) {
+            table = new Table(tableName, schema);
+            schema.addTable(table);
+            idsMap.put(table.getId(), table);
+            searchCache.add(table);
+          }
 
-        TABLE_ALL.incrementAndGet();
-
-
-        if (deletedTables.contains(tableName)) {
-          deletedTables.remove(tableName);
-          schema.getTable(tableName).setDescription(tableDescription);
-        } else {
-          Table table = new Table(tableName, schema);
+          table.setRelevant(true);
           table.setDescription(tableDescription);
-          schema.addTable(table);
-          idsMap.put(table.getId(), table);
-          searchCache.add(table);
-
-        }
-
-        if (resultSet.isLast()) {
-          for (String delTableName : deletedTables) {
-            Table table = schema.removeTable(delTableName);
-            DELETE_TABLE_COUNT.incrementAndGet();
-            idsMap.remove(table.getId());
-            searchCache.remove(table);
-          }
-
-          SCHEMA_LOAD.incrementAndGet();
         }
       }
     } catch (SQLException e) {
-      e.printStackTrace();
+      LOGGER.error("Can't refresh table from " + url, e);
     }
+
+    schemasList.forEach((schema -> {
+      Iterator<Table> iterator = schema.getAllTables().iterator();
+      while (iterator.hasNext()) {
+        Table table = iterator.next();
+        if (!table.isRelevant()) {
+          iterator.remove();
+          DELETE_TABLE_COUNT.incrementAndGet();
+          idsMap.remove(table.getId());
+          searchCache.remove(table);
+        }
+      }
+    }));
   }
 
 
   private void refreshColumns(String schemaPattern, String tablePattern) {
-    try (CPConnection connection = connectionPool.getConnection();
-         ResultSet resultSet =
-                 connection.getMetaData().getColumns(null, schemaPattern, tablePattern, null)) {
 
-      Schema schema = null;
-      Table table = null;
-      ArrayList<String> deletedColumns = new ArrayList<>();
-      while (resultSet.next()) {
-        String columnName = resultSet.getString("COLUMN_NAME");
-        String columnDescription = resultSet.getString("REMARKS");
-        String columnType = resultSet.getString("TYPE_NAME");
-        String tableName = resultSet.getString("TABLE_NAME");
-        String schemaName = resultSet.getString("TABLE_SCHEM");
+    ArrayList<Table> tableList = new ArrayList<>();
+    try (CPConnection connection = connectionPool.getConnection()) {
 
-        if (schema != null && !schemaName.equals(schema.getName())) {
-          schema = null;
-          table = null;
+      try (ResultSet resultSet = connection.getMetaData().getTables(null, schemaPattern, tablePattern, null)) {
+        while (resultSet.next()) {
+          String schemaName = resultSet.getString("TABLE_SCHEM");
+          String tableName = resultSet.getString("TABLE_NAME");
+
+          Schema schema = getSchema(schemaName);
+          if (schema == null) continue;
+          Table table = schema.getTable(tableName);
+          if (table == null) continue;
+          tableList.add(table);
+          table.getAllColumns().forEach(column -> column.setRelevant(false));
         }
+      }
 
-        if (table != null && !tableName.equals(table.getName())) {
-          for (String delColumnName : deletedColumns) {
-            Column column = table.removeColumn(delColumnName);
-            DELETE_COLUMN_COUNT.incrementAndGet();
-            idsMap.remove(column.getId());
-            searchCache.remove(column);
+      try (ResultSet resultSet = connection.getMetaData().getColumns(null, schemaPattern, tablePattern, null)) {
+        Schema schema = null;
+        Table table = null;
+        while (resultSet.next()) {
+          String columnName = resultSet.getString("COLUMN_NAME");
+          String columnDescription = resultSet.getString("REMARKS");
+          String columnType = resultSet.getString("TYPE_NAME");
+          String tableName = resultSet.getString("TABLE_NAME");
+          String schemaName = resultSet.getString("TABLE_SCHEM");
+
+          if (schema != null && !schemaName.equals(schema.getName())) {
+            schema = null;
+            table = null;
           }
-          deletedColumns.clear();
-          table = null;
 
-          TABLE_LOAD.incrementAndGet();
-        }
+          if (table != null && !tableName.equals(table.getName())) {
+            table = null;
+          }
 
-        if (schema == null) {
-          schema = getSchema(schemaName);
           if (schema == null) {
-            continue;
+            schema = getSchema(schemaName);
+            if (schema == null) {
+              continue;
+            }
           }
-        }
-
-        if (table == null) {
-          table = schema.getTable(tableName);
-          deletedColumns.clear();
 
           if (table == null) {
-            table = new Table(tableName, schema);
-            schema.addTable(table);
-          } else {
-            table.getAllColumns().forEach(c -> deletedColumns.add(c.getName()));
+            table = schema.getTable(tableName);
+            if (table == null) {
+              continue;
+            }
+            TABLE_LOAD.incrementAndGet();
           }
-        }
 
-        if (deletedColumns.contains(columnName)) {
-          deletedColumns.remove(columnName);
           Column column = table.getColumn(columnName);
-          column.setDescription(columnDescription);
-          column.setValueType(columnType);
-        } else {
-          Column column = new Column(columnName, table);
-          column.setDescription(columnDescription);
-          column.setValueType(columnType);
-          table.addColumn(column);
-          idsMap.put(column.getId(), column);
-          searchCache.add(column);
-        }
-
-        if (resultSet.isLast()) {
-          for (String delColumnName : deletedColumns) {
-            Column column = table.removeColumn(delColumnName);
-            idsMap.remove(column.getId());
-            DELETE_COLUMN_COUNT.incrementAndGet();
-            searchCache.remove(column);
+          if (column == null) {
+            column = new Column(columnName, table);
+            table.addColumn(column);
+            idsMap.put(column.getId(), column);
+            searchCache.add(column);
           }
+          column.setRelevant(true);
+          column.setDescription(columnDescription);
+          column.setValueType(columnType);
         }
       }
     } catch (SQLException e) {
-      e.printStackTrace();
+      LOGGER.error("Can't refresh columns from " + url, e);
     }
+
+    tableList.forEach(table -> {
+      Iterator<Column> iterator = table.getAllColumns().iterator();
+      while (iterator.hasNext()) {
+        Column column = iterator.next();
+        if (!column.isRelevant()) {
+          iterator.remove();
+          idsMap.remove(column.getId());
+          DELETE_COLUMN_COUNT.incrementAndGet();
+          LOGGER.warn("DELETED: " + table.getParentSchema().getName() + "." + table.getName() + "." + column.getName());
+          searchCache.remove(column);
+        }
+      }
+    });
   }
 
 
@@ -347,28 +350,17 @@ public class DatabaseCache {
     this.filter = filter;
   }
 
-  private Schema removeSchema(String schemaName) {
-    Schema schema = getSchema(schemaName);
-    schemas.remove(schema);
-    return schema;
-  }
-
   HashSet<Integer> searchElements(String searchString) {
     return searchCache.searchElements(searchString);
   }
 
 
-  ArrayList<Schema> getAllSchemas() {
+  ConcurrentHashMap<String, Schema> getAllSchemas() {
     return schemas;
   }
 
   private Schema getSchema(String schemaName) {
-    for (Schema schema : schemas) {
-      if (schema.getName().equals(schemaName)) {
-        return schema;
-      }
-    }
-    return null;
+    return schemas.get(schemaName);
   }
 
   DatabaseElement getDatabaseElementById(int id) {
@@ -384,11 +376,10 @@ public class DatabaseCache {
     return this.schemas.toString();
   }
 
-  Schema getSchemaById(long id) {
-    for (Schema schema : schemas) {
-      if (schema.getId() == id) {
-        return schema;
-      }
+  Schema getSchemaById(int id) {
+    DatabaseElement element = idsMap.get(id);
+    if (element instanceof Schema) {
+      return (Schema) element;
     }
     return null;
   }
