@@ -6,7 +6,7 @@ import java.util.ArrayList;
 
 abstract public class DatabaseElement {
 
-  private static int idCounter = Integer.MIN_VALUE;
+  private static int idCounter = 0;
 
   protected int id = idCounter++;
   protected String name;

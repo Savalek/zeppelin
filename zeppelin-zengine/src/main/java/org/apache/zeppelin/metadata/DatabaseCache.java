@@ -130,8 +130,8 @@ public class DatabaseCache {
         String schemaName = result.getString("TABLE_SCHEM");
         if (filter != null && filter.size() != 0) {
           boolean needLoad = false;
-          for (String s : filter) {
-            if (schemaName.startsWith(s)) {
+          for (String f : filter) {
+            if (schemaName.matches(f.replace("%", ".*"))) {
               needLoad = true;
               break;
             }

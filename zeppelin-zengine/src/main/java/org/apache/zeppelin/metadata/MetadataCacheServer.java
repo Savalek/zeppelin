@@ -33,6 +33,7 @@ public class MetadataCacheServer {
     LOGGER.info("Init MetadataCacheServer");
     this.updateDatabaseCacheService = Executors.newScheduledThreadPool(MetaSettings.PARALLEL_UPDATE_DB_COUNT);
 
+    // create database cache from jdbc interpreters
     if (MetaSettings.ENABLE_DATABASECACHE_FOR_INTERPRETER) {
       for (InterpreterSetting interpreterSetting : interpreterSettingManager.get()) {
         if (interpreterSetting.getGroup().equals("jdbc")) {
@@ -51,6 +52,7 @@ public class MetadataCacheServer {
       }
     }
 
+    // create database cache from config file database-meta.json
     try {
       JsonElement element = new JsonParser().parse(new FileReader(conf.getMetadataCacheServerSettingsPath()));
       JsonObject json = element.getAsJsonObject();
@@ -63,7 +65,7 @@ public class MetadataCacheServer {
         String driver = settings.get("driver").getAsString();
 
         ArrayList<String> filter = new ArrayList<>();
-        settings.get("startWithFilter").getAsJsonArray().forEach(f -> filter.add(f.getAsString()));
+        settings.get("schema_filter").getAsJsonArray().forEach(f -> filter.add(f.getAsString()));
         createDatabaseCache(dbName, url, username, password, driver, filter);
       });
     } catch (FileNotFoundException e) {
