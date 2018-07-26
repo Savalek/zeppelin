@@ -16,15 +16,6 @@ public class DatabaseCache {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(DatabaseCache.class);
 
-  private AtomicInteger SCHEMA_ALL = new AtomicInteger();
-  private AtomicInteger SCHEMA_LOAD = new AtomicInteger();
-  private AtomicInteger TABLE_ALL = new AtomicInteger();
-  private AtomicInteger TABLE_LOAD = new AtomicInteger();
-  private AtomicInteger DELETE_SCHEMA_COUNT = new AtomicInteger();
-  private AtomicInteger DELETE_TABLE_COUNT = new AtomicInteger();
-  private AtomicInteger DELETE_COLUMN_COUNT = new AtomicInteger();
-  private long START_TIME = 0;
-
   private String databaseName;
   private String url;
   private ConnectionPool connectionPool;
@@ -41,32 +32,6 @@ public class DatabaseCache {
   }
 
   void updateDatabaseCache() {
-
-    Thread statusThread = null;
-    if (databaseName.equals("remote_conf") && MetaSettings.REMOTE_LOG_ENABLE) {
-      statusThread = new Thread(() -> {
-        while (!Thread.currentThread().isInterrupted()) {
-          try {
-            Thread.sleep(2000);
-          } catch (InterruptedException e) {
-            TABLE_LOAD.set(TABLE_ALL.get());
-            SCHEMA_LOAD.set(SCHEMA_ALL.get());
-            break;
-          } finally {
-            LOGGER.info(String.format("### size: %7d | DELETED: |%4d|%4d|%4d|  | schema: %6.2f%% (%4d/%4d) | table: %6.2f%% (%6d/%6d) | sec %5d | available: %3d  busy: %3d",
-                    idsMap.size(), DELETE_SCHEMA_COUNT.get(), DELETE_TABLE_COUNT.get(), DELETE_COLUMN_COUNT.get(),
-                    (double) SCHEMA_LOAD.get() / SCHEMA_ALL.get() * 100, SCHEMA_LOAD.get(), SCHEMA_ALL.get(),
-                    (double) TABLE_LOAD.get() / TABLE_ALL.get() * 100, TABLE_LOAD.get(), TABLE_ALL.get(),
-                    (System.currentTimeMillis() - START_TIME) / 1000,
-                    connectionPool.availableConn.size(), connectionPool.busyConn.size()));
-          }
-        }
-      });
-      statusThread.start();
-    }
-
-    START_TIME = System.currentTimeMillis();
-
     String defaultThreadName = Thread.currentThread().getName();
     Thread.currentThread().setName("*" + databaseName + "*-updater-thread");
     LOGGER.info("Start updating '{}' from '{}'", databaseName, url);
@@ -92,29 +57,8 @@ public class DatabaseCache {
     try {
       executorService.shutdown();
       executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
-      if (statusThread != null) {
-        statusThread.interrupt();
-      }
     } catch (InterruptedException e) {
       LOGGER.error("Can't shutdown executorService", e);
-    }
-
-    try {
-      if (statusThread != null) {
-        statusThread.join();
-      }
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    } finally {
-      LOGGER.info("Complete updating \"" + databaseName + "\" from " + url + " | elements in database: " + idsMap.size() + " |   time: " + (System.currentTimeMillis() - START_TIME));
-      Thread.currentThread().setName(defaultThreadName);
-      TABLE_ALL.set(0);
-      SCHEMA_ALL.set(0);
-      TABLE_LOAD.set(0);
-      SCHEMA_LOAD.set(0);
-      DELETE_SCHEMA_COUNT.set(0);
-      DELETE_TABLE_COUNT.set(0);
-      DELETE_COLUMN_COUNT.set(0);
     }
   }
 
@@ -157,11 +101,9 @@ public class DatabaseCache {
           idsMap.remove(schema.getId());
           searchCache.remove(schema);
           iterator.remove();
-          DELETE_SCHEMA_COUNT.incrementAndGet();
         }
       }
 
-      SCHEMA_ALL.set(schemas.size());
     } catch (SQLException e) {
       LOGGER.error("Can't refresh schemas from {}", url, e);
     }
@@ -197,10 +139,8 @@ public class DatabaseCache {
           if (schema == null) {
             continue;
           }
-          SCHEMA_LOAD.incrementAndGet();
         }
 
-        TABLE_ALL.incrementAndGet();
         Table table = schema.getTable(tableName);
         if (table == null) {
           table = new Table(tableName, schema);
@@ -222,7 +162,6 @@ public class DatabaseCache {
         Table table = iterator.next();
         if (!table.isRelevant()) {
           iterator.remove();
-          DELETE_TABLE_COUNT.incrementAndGet();
           idsMap.remove(table.getId());
           searchCache.remove(table);
         }
@@ -279,7 +218,6 @@ public class DatabaseCache {
           if (table == null) {
             continue;
           }
-          TABLE_LOAD.incrementAndGet();
         }
 
         Column column = table.getColumn(columnName);
@@ -304,7 +242,6 @@ public class DatabaseCache {
         if (!column.isRelevant()) {
           iterator.remove();
           idsMap.remove(column.getId());
-          DELETE_COLUMN_COUNT.incrementAndGet();
           searchCache.remove(column);
         }
       }
