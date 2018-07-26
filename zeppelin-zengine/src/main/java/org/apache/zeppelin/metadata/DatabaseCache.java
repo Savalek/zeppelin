@@ -10,7 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class DatabaseCache {
 
@@ -59,6 +58,8 @@ public class DatabaseCache {
       executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
     } catch (InterruptedException e) {
       LOGGER.error("Can't shutdown executorService", e);
+    } finally {
+      Thread.currentThread().setName(defaultThreadName);
     }
   }
 
@@ -110,7 +111,7 @@ public class DatabaseCache {
   }
 
   private void refreshTables(String schemaPattern) {
-    String regularSchema = schemaPattern.replaceAll("%", ".*");
+    String regularSchema = schemaPattern == null ? ".*" : schemaPattern.replace("%", ".*");
 
     // list of schemas by filter
     ArrayList<Schema> schemasList = new ArrayList<>();
