@@ -46,7 +46,7 @@ public class MetadataCacheServer {
           if (isCorrectStrings(interpreterName, url, username, password, driver)) {
             createDatabaseCache(interpreterName, url, username, password, driver, null);
           } else {
-            LOGGER.error("Failed to parse interpreter properties! interpreterName: " + interpreterName);
+            LOGGER.error("Failed to parse {} interpreter properties! ", interpreterName);
           }
         }
       }
@@ -54,7 +54,9 @@ public class MetadataCacheServer {
 
     // create database cache from config file database-meta.json
     try {
-      JsonElement element = new JsonParser().parse(new FileReader(conf.getMetadataCacheServerSettingsPath()));
+      JsonElement element = new JsonParser()
+              .parse(new FileReader(conf.getMetadataCacheServerSettingsPath()));
+
       JsonObject json = element.getAsJsonObject();
       json.entrySet().forEach(entry -> {
         JsonObject settings = (JsonObject) entry.getValue();
@@ -69,7 +71,7 @@ public class MetadataCacheServer {
         createDatabaseCache(dbName, url, username, password, driver, filter);
       });
     } catch (FileNotFoundException e) {
-      LOGGER.error("Configuration file '" + conf.getMetadataCacheServerSettingsPath() + "' not found");
+      LOGGER.error("Configuration file {} not found", conf.getMetadataCacheServerSettingsPath());
     }
   }
 
@@ -77,7 +79,7 @@ public class MetadataCacheServer {
                                    String password, String driver, ArrayList<String> filter) {
 
     if (databases.containsKey(dbName)) {
-      LOGGER.error("DatabaseCache with name '" + dbName + "' already exists");
+      LOGGER.error("DatabaseCache with name {} already exists", dbName);
       return;
     }
 
@@ -85,7 +87,7 @@ public class MetadataCacheServer {
     try {
       db = new DatabaseCache(dbName, url, username, password, driver);
     } catch (ClassNotFoundException e) {
-      LOGGER.error("Can't open driver " + driver, e);
+      LOGGER.error("Can't open driver {}", driver, e);
       return;
     }
     if (filter != null) {
@@ -119,7 +121,8 @@ public class MetadataCacheServer {
     return dbNames;
   }
 
-  public ArrayList<JsonObject> jstreeGetChildren(String databaseName, Integer elementId, String type, Integer schemaId) throws IllegalArgumentException {
+  public ArrayList<JsonObject> jstreeGetChildren(String databaseName, Integer elementId,
+                                                 String type, Integer schemaId) throws IllegalArgumentException {
     ArrayList<JsonObject> jsonElements = new ArrayList<>();
 
     if (!isCorrectStrings(databaseName, type) || elementId == null) {
@@ -184,7 +187,7 @@ public class MetadataCacheServer {
     if (db != null) {
       return db;
     } else {
-      throw new IllegalArgumentException("Can't get databaseCache. Name: \"" + databaseName + "\"");
+      throw new IllegalArgumentException(String.format("Can't get databaseCache. Name: %s", databaseName));
     }
   }
 

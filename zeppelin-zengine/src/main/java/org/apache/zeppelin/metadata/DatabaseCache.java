@@ -37,13 +37,13 @@ public class DatabaseCache {
     this.databaseName = databaseName;
     this.url = url;
     connectionPool = new ConnectionPool(username, password, url, driver);
-    LOGGER.info("Create new DatabaseCache. Name: " + databaseName + "; url: " + url);
+    LOGGER.info("Create new DatabaseCache. Name: {}; url: {}.", databaseName, url);
   }
 
   void updateDatabaseCache() {
 
     Thread statusThread = null;
-    if (databaseName.equals("remote") && MetaSettings.REMOTE_LOG_ENABLE) {
+    if (databaseName.equals("remote_conf") && MetaSettings.REMOTE_LOG_ENABLE) {
       statusThread = new Thread(() -> {
         while (!Thread.currentThread().isInterrupted()) {
           try {
@@ -69,7 +69,7 @@ public class DatabaseCache {
 
     String defaultThreadName = Thread.currentThread().getName();
     Thread.currentThread().setName("*" + databaseName + "*-updater-thread");
-    LOGGER.info("Start updating \"" + databaseName + "\" from " + url);
+    LOGGER.info("Start updating '{}' from '{}'", databaseName, url);
 
     refreshAllSchemas();
 
@@ -78,9 +78,8 @@ public class DatabaseCache {
     if (filter.size() > 0) {
       for (String f : filter) {
         executorService.submit(() -> {
-          String schemaPattern = f + "%";
-          refreshTables(schemaPattern);
-          refreshColumns(schemaPattern, null);
+          refreshTables(f);
+          refreshColumns(f, null);
         });
       }
     } else {
@@ -164,59 +163,57 @@ public class DatabaseCache {
 
       SCHEMA_ALL.set(schemas.size());
     } catch (SQLException e) {
-      LOGGER.error("Can't refresh schemas from " + url, e);
+      LOGGER.error("Can't refresh schemas from {}", url, e);
     }
   }
 
   private void refreshTables(String schemaPattern) {
+    String regularSchema = schemaPattern.replaceAll("%", ".*");
+
+    // list of schemas by filter
     ArrayList<Schema> schemasList = new ArrayList<>();
-    try (CPConnection connection = connectionPool.getConnection()) {
+    getAllSchemas().entrySet().stream()
+            .filter(entry -> entry.getKey().matches(regularSchema))
+            .forEach(entry -> {
+              schemasList.add(entry.getValue());
+              entry.getValue().getAllTables().forEach(t -> t.setRelevant(false));
+            });
 
-      try (ResultSet resultSet = connection.getMetaData().getSchemas(null, schemaPattern)) {
-        while (resultSet.next()) {
-          String schemaName = resultSet.getString("TABLE_SCHEM");
-          Schema schema = getSchema(schemaName);
-          if (schema == null) continue;
-          schemasList.add(schema);
-          schema.getAllTables().forEach(t -> t.setRelevant(false));
+    try (CPConnection connection = connectionPool.getConnection();
+         ResultSet resultSet = connection.getMetaData().getTables(null, schemaPattern, null, null)) {
+
+      Schema schema = null;
+      while (resultSet.next()) {
+        String schemaName = resultSet.getString("TABLE_SCHEM");
+        String tableName = resultSet.getString("TABLE_NAME");
+        String tableDescription = resultSet.getString("REMARKS");
+
+        if (schema != null && !schemaName.equals(schema.getName())) {
+          schema = null;
         }
-      }
 
-      try (ResultSet resultSet = connection.getMetaData().getTables(null, schemaPattern, null, null)) {
-
-        Schema schema = null;
-        while (resultSet.next()) {
-          String schemaName = resultSet.getString("TABLE_SCHEM");
-          String tableName = resultSet.getString("TABLE_NAME");
-          String tableDescription = resultSet.getString("REMARKS");
-
-          if (schema != null && !schemaName.equals(schema.getName())) {
-            schema = null;
-          }
-
+        if (schema == null) {
+          schema = getSchema(schemaName);
           if (schema == null) {
-            schema = getSchema(schemaName);
-            if (schema == null) {
-              continue;
-            }
-            SCHEMA_LOAD.incrementAndGet();
+            continue;
           }
-
-          TABLE_ALL.incrementAndGet();
-          Table table = schema.getTable(tableName);
-          if (table == null) {
-            table = new Table(tableName, schema);
-            schema.addTable(table);
-            idsMap.put(table.getId(), table);
-            searchCache.add(table);
-          }
-
-          table.setRelevant(true);
-          table.setDescription(tableDescription);
+          SCHEMA_LOAD.incrementAndGet();
         }
+
+        TABLE_ALL.incrementAndGet();
+        Table table = schema.getTable(tableName);
+        if (table == null) {
+          table = new Table(tableName, schema);
+          schema.addTable(table);
+          idsMap.put(table.getId(), table);
+          searchCache.add(table);
+        }
+
+        table.setRelevant(true);
+        table.setDescription(tableDescription);
       }
     } catch (SQLException e) {
-      LOGGER.error("Can't refresh table from " + url, e);
+      LOGGER.error("Can't refresh table from {}", url, e);
     }
 
     schemasList.forEach((schema -> {
@@ -235,72 +232,69 @@ public class DatabaseCache {
 
 
   private void refreshColumns(String schemaPattern, String tablePattern) {
+    String regularSchema = schemaPattern == null ? ".*" : schemaPattern.replace("%", ".*");
+    String regularTable = tablePattern == null ? ".*" : tablePattern.replace("%", ".*");
 
+    // list of tables by filter
     ArrayList<Table> tableList = new ArrayList<>();
-    try (CPConnection connection = connectionPool.getConnection()) {
+    getAllSchemas().entrySet().stream()
+            .filter(entry -> entry.getKey().matches(regularSchema))
+            .map(Map.Entry::getValue)
+            .flatMap(schema -> schema.getAllTables().stream())
+            .filter(table -> table.getName().matches(regularTable))
+            .forEach(table -> {
+              tableList.add(table);
+              table.getAllColumns().forEach(column -> column.setRelevant(false));
+            });
 
-      try (ResultSet resultSet = connection.getMetaData().getTables(null, schemaPattern, tablePattern, null)) {
-        while (resultSet.next()) {
-          String schemaName = resultSet.getString("TABLE_SCHEM");
-          String tableName = resultSet.getString("TABLE_NAME");
+    try (CPConnection connection = connectionPool.getConnection();
+         ResultSet resultSet = connection.getMetaData().getColumns(null, schemaPattern, tablePattern, null)) {
+      Schema schema = null;
+      Table table = null;
+      while (resultSet.next()) {
+        String columnName = resultSet.getString("COLUMN_NAME");
+        String columnDescription = resultSet.getString("REMARKS");
+        String columnType = resultSet.getString("TYPE_NAME");
+        String tableName = resultSet.getString("TABLE_NAME");
+        String schemaName = resultSet.getString("TABLE_SCHEM");
 
-          Schema schema = getSchema(schemaName);
-          if (schema == null) continue;
-          Table table = schema.getTable(tableName);
-          if (table == null) continue;
-          tableList.add(table);
-          table.getAllColumns().forEach(column -> column.setRelevant(false));
+        if (schema != null && !schemaName.equals(schema.getName())) {
+          schema = null;
+          table = null;
         }
-      }
 
-      try (ResultSet resultSet = connection.getMetaData().getColumns(null, schemaPattern, tablePattern, null)) {
-        Schema schema = null;
-        Table table = null;
-        while (resultSet.next()) {
-          String columnName = resultSet.getString("COLUMN_NAME");
-          String columnDescription = resultSet.getString("REMARKS");
-          String columnType = resultSet.getString("TYPE_NAME");
-          String tableName = resultSet.getString("TABLE_NAME");
-          String schemaName = resultSet.getString("TABLE_SCHEM");
+        if (table != null && !tableName.equals(table.getName())) {
+          table = null;
+        }
 
-          if (schema != null && !schemaName.equals(schema.getName())) {
-            schema = null;
-            table = null;
-          }
-
-          if (table != null && !tableName.equals(table.getName())) {
-            table = null;
-          }
-
+        if (schema == null) {
+          schema = getSchema(schemaName);
           if (schema == null) {
-            schema = getSchema(schemaName);
-            if (schema == null) {
-              continue;
-            }
+            continue;
           }
-
-          if (table == null) {
-            table = schema.getTable(tableName);
-            if (table == null) {
-              continue;
-            }
-            TABLE_LOAD.incrementAndGet();
-          }
-
-          Column column = table.getColumn(columnName);
-          if (column == null) {
-            column = new Column(columnName, table);
-            table.addColumn(column);
-            idsMap.put(column.getId(), column);
-            searchCache.add(column);
-          }
-          column.setRelevant(true);
-          column.setDescription(columnDescription);
-          column.setValueType(columnType);
         }
+
+        if (table == null) {
+          table = schema.getTable(tableName);
+          if (table == null) {
+            continue;
+          }
+          TABLE_LOAD.incrementAndGet();
+        }
+
+        Column column = table.getColumn(columnName);
+        if (column == null) {
+          column = new Column(columnName, table);
+          table.addColumn(column);
+          idsMap.put(column.getId(), column);
+          searchCache.add(column);
+        }
+        column.setRelevant(true);
+        column.setDescription(columnDescription);
+        column.setValueType(columnType);
       }
     } catch (SQLException e) {
-      LOGGER.error("Can't refresh columns from " + url, e);
+      LOGGER.error("Can't refresh columns from {}", url, e);
     }
 
     tableList.forEach(table -> {
@@ -311,7 +305,6 @@ public class DatabaseCache {
           iterator.remove();
           idsMap.remove(column.getId());
           DELETE_COLUMN_COUNT.incrementAndGet();
-          LOGGER.warn("DELETED: " + table.getParentSchema().getName() + "." + table.getName() + "." + column.getName());
           searchCache.remove(column);
         }
       }
@@ -322,7 +315,7 @@ public class DatabaseCache {
   void forceRefreshSchema(Integer elementId, boolean isRecursively) {
     Schema schema = getSchemaById(elementId);
     if (schema == null) {
-      LOGGER.error("Schema  with id " + elementId + " not found.");
+      LOGGER.error("Schema with id {} not found.", elementId);
       return;
     }
     refreshTables(schema.getName());
@@ -334,12 +327,12 @@ public class DatabaseCache {
   void forceRefreshTable(Integer elementId, Integer schemaId) {
     Schema schema = getSchemaById(schemaId);
     if (schema == null) {
-      LOGGER.error("Schema  with id " + schemaId + " not found.");
+      LOGGER.error("Schema with id {} not found.", schemaId);
       return;
     }
     Table table = getSchemaById(schemaId).getTableById(elementId);
     if (table == null) {
-      LOGGER.error("Table with id " + elementId + " not found.");
+      LOGGER.error("Table with id not found.", elementId);
       return;
     }
     refreshColumns(table.getParentSchema().getName(), table.getName());
