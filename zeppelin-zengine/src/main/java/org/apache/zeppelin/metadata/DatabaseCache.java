@@ -34,6 +34,7 @@ public class DatabaseCache {
     String defaultThreadName = Thread.currentThread().getName();
     Thread.currentThread().setName("*" + databaseName + "*-updater-thread");
     LOGGER.info("Start updating '{}' from '{}'", databaseName, url);
+    long START_TIME = System.currentTimeMillis();
 
     refreshAllSchemas();
 
@@ -60,6 +61,9 @@ public class DatabaseCache {
       LOGGER.error("Can't shutdown executorService", e);
     } finally {
       Thread.currentThread().setName(defaultThreadName);
+      LOGGER.info("Complete updating '{}' from '{}' | elements in database: {} | time: {} ms.",
+              databaseName, url, idsMap.size(), (System.currentTimeMillis() - START_TIME));
+
     }
   }
 
