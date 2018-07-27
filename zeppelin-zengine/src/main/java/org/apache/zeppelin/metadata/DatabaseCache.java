@@ -60,10 +60,9 @@ public class DatabaseCache {
     } catch (InterruptedException e) {
       LOGGER.error("Can't shutdown executorService", e);
     } finally {
-      Thread.currentThread().setName(defaultThreadName);
       LOGGER.info("Complete updating '{}' from '{}' | elements in database: {} | time: {} ms.",
               databaseName, url, idsMap.size(), (System.currentTimeMillis() - START_TIME));
-
+      Thread.currentThread().setName(defaultThreadName);
     }
   }
 
